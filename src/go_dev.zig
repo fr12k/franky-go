@@ -799,3 +799,48 @@ test "buildParametersJson includes go-dev preset" {
     try testing.expect(std.mem.indexOf(u8, params, "\"go-dev\"") != null);
 }
 
+test "extension integration: full chain through Manager, Host, PresetRegistry, buildParametersJson" {
+    const gpa = testing.allocator;
+
+    // Set up the full stack: slash registry + extension manager + preset registry.
+    var slash_reg = franky.coding.slash.Registry.init(gpa);
+    defer slash_reg.deinit();
+
+    var preset_reg = subagent_mod.PresetRegistry.init(gpa);
+    defer preset_reg.deinit();
+
+    var mgr = ext.Manager.init(gpa);
+    defer mgr.deinit();
+    mgr.presets = &preset_reg;
+
+    // Register the extension, which triggers init_fn → host.registerTool + host.registerPreset.
+    try mgr.register(extension(), &slash_reg);
+
+    // ── verify tool registration ──
+    const tools = mgr.tools();
+    try testing.expectEqual(@as(usize, 1), tools.len);
+    try testing.expectEqualStrings("go", tools[0].name);
+    try testing.expect(tools[0].execute == goExecute);
+
+    // ── verify preset registration ──
+    const p = preset_reg.get("go-dev");
+    try testing.expect(p != null);
+    try testing.expectEqualStrings("go-dev", p.?.name);
+    try testing.expectEqual(.code, p.?.default_role);
+    try testing.expectEqualStrings("", p.?.default_profile);
+    try testing.expect(p.?.description.len > 0);
+    try testing.expect(p.?.default_system_prompt.len > 0);
+
+    // ── verify buildParametersJson includes go-dev ──
+    const params = try subagent_mod.buildParametersJson(gpa, &preset_reg);
+    defer gpa.free(params);
+    try testing.expect(std.mem.indexOf(u8, params, "\"go-dev\"") != null);
+    try testing.expect(std.mem.indexOf(u8, params, "\"research\"") == null);
+
+    // ── verify tool schema is well-formed JSON ──
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, tools[0].parameters_json, .{});
+    defer parsed.deinit();
+    try testing.expect(parsed.value.object.get("required") != null);
+    try testing.expect(parsed.value.object.get("properties") != null);
+}
+
