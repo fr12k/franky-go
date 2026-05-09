@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     // ── The extension module ────────────────────────────────────────
     // This is the go-dev extension that other programs can import.
     // It provides:
-    //   - gofmtTool(), govetTool(), gotestTool()  — AgentTool factories
+    //   - goTool()                              — AgentTool factory
     //   - buildGoDevTools()                       — preset builder for subagent
     //   - extension()                             — ext.Extension factory
     //   - registerPreset(reg)                     — one-shot registration helper

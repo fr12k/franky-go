@@ -1,9 +1,8 @@
-//! go-dev extension — custom Go tools + a "go-dev" subagent preset.
+//! go-dev extension — a single "go" tool + a "go-dev" subagent preset.
 //!
-//! This module is a Tier-1 franky extension that registers three
-//! Go-specific tools (`gofmt`, `govet`, `gotest`) and a subagent
-//! preset named `"go-dev"` that bundles them alongside the standard
-//! file and shell tools.
+//! This module is a Tier-1 franky extension that registers one Go tool
+//! (`go`) and a subagent preset named `"go-dev"` that bundles it
+//! alongside the standard file and shell tools.
 //!
 //! ## Usage as a Tier-1 extension (inside franky main)
 //!
@@ -27,13 +26,11 @@
 //! // Then preset_registry.get("go-dev") returns the preset.
 //! ```
 //!
-//! ## Tool schemas
+//! ## Tool schema
 //!
 //! | Tool | Description | Required args |
 //! |------|-------------|---------------|
-//! | `gofmt` | Run `gofmt -d` on a Go file | `path` (string) |
-//! | `govet` | Run `go vet` on a Go package | `pkg` (string) |
-//! | `gotest` | Run `go test` on a Go package | `pkg` (string), `flags` (string, optional) |
+//! | `go`  | Run `go fmt` / `go vet` / `go build` / `go test` | `command` (string), `path` (string, except `path` is a file for `fmt` and a package for others), `flags` (string, optional), `cwd` (string, optional) |
 
 const std = @import("std");
 const franky = @import("franky");
@@ -43,13 +40,17 @@ const ai = franky.ai.types;
 const subagent_mod = franky.coding.tools.subagent;
 const ext = franky.coding.extensions;
 
-// ─── Tool executors ──────────────────────────────────────────────
+// ─── Tool executor ───────────────────────────────────────────────────
 //
-// Each executor accepts the standard AgentTool.execute signature,
-// shells out to the corresponding Go tool via std.process.run,
-// and returns the result. Error results use structured tool_code
-// values per §F.2 (gofmt_not_found, go_cmd_not_found, gofmt_failed,
-// govet_failed, gotest_failed).
+// Dispatches to one of four sub-tools based on the `command` field:
+//   "fmt"   → gofmt -d <path>        (path = .go file)
+//   "vet"   → go vet <path>          (path = package)
+//   "build" → go build <path>        (path = package)
+//   "test"  → go test [flags] <path> (path = package)
+//
+// Error results use structured tool_code values:
+//   go_cmd_not_found, go_fmt_not_a_go_file, go_fmt_failed,
+//   go_vet_failed, go_build_failed, go_test_failed.
 
 /// Build a structured failure ToolResult with a tool_code subcode.
 /// Mirrors franky's coding/tools/common.zig:toolError but duplicated
@@ -65,7 +66,14 @@ fn toolError(allocator: std.mem.Allocator, code: []const u8, comptime fmt: []con
     return .{ .content = arr, .is_error = true, .tool_code = code_dup };
 }
 
-fn gofmtExecute(
+const GoArgs = struct {
+    command: []const u8,
+    path: []const u8,
+    flags: ?[]const u8 = null,
+    cwd: ?[]const u8 = null,
+};
+
+fn goExecute(
     self: *const at.AgentTool,
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -79,135 +87,70 @@ fn gofmtExecute(
     _ = cancel;
     _ = on_update;
 
-    const GofmtArgs = struct { path: []const u8 };
-    const args = try std.json.parseFromSlice(GofmtArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
+    const args = try std.json.parseFromSlice(GoArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
     defer args.deinit();
 
+    const command = args.value.command;
     const path = args.value.path;
 
-    // Reject non-.go files before calling gofmt.
-    if (!std.mem.endsWith(u8, path, ".go")) {
-        return toolError(allocator, "gofmt_not_a_go_file", "expected a .go file, got '{s}'", .{path});
-    }
-
-    const argv = &[_][]const u8{ "gofmt", "-d", path };
-
-    const result = std.process.run(allocator, io, .{
-        .argv = argv,
-    }) catch |err| {
-        if (err == error.FileNotFound) {
-            return toolError(allocator, "gofmt_not_found", "gofmt command not found. Is Go installed and in your PATH?", .{});
+    // ── go fmt ────────────────────────────────────────────────────
+    if (std.mem.eql(u8, command, "fmt")) {
+        if (!std.mem.endsWith(u8, path, ".go")) {
+            return toolError(allocator, "go_fmt_not_a_go_file", "expected a .go file, got '{s}'", .{path});
         }
-        return toolError(allocator, "gofmt_spawn_failed", "{s}", .{@errorName(err)});
-    };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
 
-    if (result.term.exited != 0) {
-        return toolError(allocator, "gofmt_failed", "gofmt -d {s} exited with code {d}:\n{s}", .{ path, result.term.exited, result.stderr });
-    }
+        const result = std.process.run(allocator, io, .{
+            .argv = &[_][]const u8{ "gofmt", "-d", path },
+        }) catch |err| {
+            if (err == error.FileNotFound) {
+                return toolError(allocator, "go_fmt_not_found", "gofmt command not found. Is Go installed and in your PATH?", .{});
+            }
+            return toolError(allocator, "go_fmt_spawn_failed", "{s}", .{@errorName(err)});
+        };
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
 
-    if (result.stdout.len == 0) {
+        if (result.term.exited != 0) {
+            return toolError(allocator, "go_fmt_failed", "gofmt -d {s} exited with code {d}:\n{s}", .{ path, result.term.exited, result.stderr });
+        }
+
+        const text = if (result.stdout.len == 0)
+            try allocator.dupe(u8, "File is already formatted.")
+        else
+            try allocator.dupe(u8, result.stdout);
+
         const arr = try allocator.alloc(ai.ContentBlock, 1);
-        arr[0] = .{ .text = .{ .text = try allocator.dupe(u8, "File is already formatted.") } };
+        arr[0] = .{ .text = .{ .text = text } };
         return .{ .content = arr, .is_error = false };
     }
 
-    const arr = try allocator.alloc(ai.ContentBlock, 1);
-    arr[0] = .{ .text = .{ .text = try allocator.dupe(u8, result.stdout) } };
-    return .{ .content = arr, .is_error = false };
-}
+    // ── go vet, go build, go test ─────────────────────────────────
+    const is_go_cmd = std.mem.eql(u8, command, "vet") or
+        std.mem.eql(u8, command, "build") or
+        std.mem.eql(u8, command, "test");
 
-fn govetExecute(
-    self: *const at.AgentTool,
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    call_id: []const u8,
-    args_json: []const u8,
-    cancel: *franky.ai.stream.Cancel,
-    on_update: at.OnUpdate,
-) anyerror!at.ToolResult {
-    _ = self;
-    _ = call_id;
-    _ = cancel;
-    _ = on_update;
-
-    const GovetArgs = struct {
-        pkg: []const u8,
-        cwd: ?[]const u8 = null,
-    };
-    const args = try std.json.parseFromSlice(GovetArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
-    defer args.deinit();
-
-    const pkg = args.value.pkg;
-    const argv = &[_][]const u8{ "go", "vet", pkg };
-    const result = std.process.run(allocator, io, .{
-        .argv = argv,
-        .cwd = if (args.value.cwd) |c| .{ .path = c } else .inherit,
-    }) catch |err| {
-        if (err == error.FileNotFound) {
-            return toolError(allocator, "go_cmd_not_found", "go command not found. Is Go installed and in your PATH?", .{});
-        }
-        return toolError(allocator, "govet_spawn_failed", "{s}", .{@errorName(err)});
-    };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    // `go vet` can write to stderr even on success. A non-zero exit
-    // code is the only reliable signal of failure.
-    const output = try std.fmt.allocPrint(allocator, "{s}{s}", .{ result.stdout, result.stderr });
-    defer allocator.free(output);
-
-    if (result.term.exited != 0) {
-        return toolError(allocator, "govet_failed", "go vet {s} exited with code {d}:\n{s}", .{ pkg, result.term.exited, output });
+    if (!is_go_cmd) {
+        return toolError(allocator, "go_unknown_command", "unknown command '{s}'. Must be one of: fmt, vet, build, test", .{command});
     }
 
-    if (output.len == 0) {
-        const arr = try allocator.alloc(ai.ContentBlock, 1);
-        arr[0] = .{ .text = .{ .text = try allocator.dupe(u8, "`go vet` found no issues.") } };
-        return .{ .content = arr, .is_error = false };
-    }
-
-    const arr = try allocator.alloc(ai.ContentBlock, 1);
-    arr[0] = .{ .text = .{ .text = try allocator.dupe(u8, output) } };
-    return .{ .content = arr, .is_error = false };
-}
-
-fn gotestExecute(
-    self: *const at.AgentTool,
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    call_id: []const u8,
-    args_json: []const u8,
-    cancel: *franky.ai.stream.Cancel,
-    on_update: at.OnUpdate,
-) anyerror!at.ToolResult {
-    _ = self;
-    _ = call_id;
-    _ = cancel;
-    _ = on_update;
-
-    const GotestArgs = struct {
-        pkg: []const u8,
-        flags: ?[]const u8 = null,
-        cwd: ?[]const u8 = null,
-    };
-    const args = try std.json.parseFromSlice(GotestArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
-    defer args.deinit();
-
+    // Build argv: go <command> [flags...] <path>
     var argv_list: std.ArrayList([]const u8) = .empty;
     defer argv_list.deinit(allocator);
 
-    try argv_list.appendSlice(allocator, &[_][]const u8{ "go", "test" });
-    if (args.value.flags) |f| {
-        var it = std.mem.splitScalar(u8, f, ' ');
-        while (it.next()) |flag| {
-            if (flag.len > 0) {
-                try argv_list.append(allocator, flag);
+    try argv_list.appendSlice(allocator, &[_][]const u8{ "go", command });
+
+    if (std.mem.eql(u8, command, "test")) {
+        if (args.value.flags) |f| {
+            var it = std.mem.splitScalar(u8, f, ' ');
+            while (it.next()) |flag| {
+                if (flag.len > 0) {
+                    try argv_list.append(allocator, flag);
+                }
             }
         }
     }
-    try argv_list.append(allocator, args.value.pkg);
+
+    try argv_list.append(allocator, path);
 
     const result = std.process.run(allocator, io, .{
         .argv = argv_list.items,
@@ -216,7 +159,7 @@ fn gotestExecute(
         if (err == error.FileNotFound) {
             return toolError(allocator, "go_cmd_not_found", "go command not found. Is Go installed and in your PATH?", .{});
         }
-        return toolError(allocator, "gotest_spawn_failed", "{s}", .{@errorName(err)});
+        return toolError(allocator, "go_spawn_failed", "{s}", .{@errorName(err)});
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -225,7 +168,17 @@ fn gotestExecute(
 
     if (result.term.exited != 0) {
         defer allocator.free(output);
-        return toolError(allocator, "gotest_failed", "go test exited with code {d}:\n{s}", .{ result.term.exited, output });
+        const code = if (std.mem.eql(u8, command, "vet")) "go_vet_failed"
+            else if (std.mem.eql(u8, command, "build")) "go_build_failed"
+            else "go_test_failed";
+        return toolError(allocator, code, "go {s} {s} exited with code {d}:\n{s}", .{ command, path, result.term.exited, output });
+    }
+
+    // For vet/build, a zero-exit with no output is success.
+    if (output.len == 0) {
+        const arr = try allocator.alloc(ai.ContentBlock, 1);
+        arr[0] = .{ .text = .{ .text = try allocator.dupe(u8, "`go {s}` completed successfully with no output.") } };
+        return .{ .content = arr, .is_error = false };
     }
 
     const arr = try allocator.alloc(ai.ContentBlock, 1);
@@ -233,62 +186,30 @@ fn gotestExecute(
     return .{ .content = arr, .is_error = false };
 }
 
-// ─── Tool factory functions ────────────────────────────────────────
+// ─── Tool factory function ───────────────────────────────────────────
 
-pub fn gofmtTool() at.AgentTool {
+pub fn goTool() at.AgentTool {
     return .{
-        .name = "gofmt",
-        .description = "Run gofmt -d on a Go file to show formatting diffs. Pass the file path as `path`.",
+        .name = "go",
+        .description = "Run Go tool commands: fmt, vet, build, or test. Use `command` to select the sub-tool and `path` for the file (fmt) or package (vet/build/test).",
         .parameters_json =
-        \\{"type":"object","required":["path"],"properties":{
-        \\"path":{"type":"string","description":"Path to the Go file to format-check"}
+        \\{"type":"object","required":["command","path"],"properties":{
+        \\"command":{"type":"string","enum":["fmt","vet","build","test"],"description":"Go sub-command to run"},
+        \\"path":{"type":"string","description":"File path (fmt) or package path (vet/build/test, e.g. ./... or ./internal/foo)"},
+        \\"flags":{"type":"string","description":"Additional flags for test (optional, e.g. -v -race)"},
+        \\"cwd":{"type":"string","description":"Working directory (optional)"}
         \\}}
         ,
         .execution_mode = .sequential,
-        .execute = gofmtExecute,
+        .execute = goExecute,
     };
 }
 
-pub fn govetTool() at.AgentTool {
-    return .{
-        .name = "govet",
-        .description = "Run go vet on a Go package to check for suspicious constructs. Pass the package path as `pkg`.",
-        .parameters_json =
-        \\{"type":"object","required":["pkg"],"properties":{
-        \\"pkg":{"type":"string","description":"Package path (e.g. ./... or ./internal/foo)"}
-        \\}}
-        ,
-        .execution_mode = .sequential,
-        .execute = govetExecute,
-    };
-}
-
-pub fn gotestTool() at.AgentTool {
-    return .{
-        .name = "gotest",
-        .description = "Run go test on a Go package and report results. Pass `pkg` (required) and optionally `flags`.",
-        .parameters_json =
-        \\{"type":"object","required":["pkg"],"properties":{
-        \\"pkg":{"type":"string","description":"Package path (e.g. ./...)"},
-        \\"flags":{"type":"string","description":"Additional go test flags (optional, e.g. -v -race)"}
-        \\}}
-        ,
-        .execution_mode = .sequential,
-        .execute = gotestExecute,
-    };
-}
-
-// ─── Preset builder ────────────────────────────────────────────────
+// ─── Preset builder ──────────────────────────────────────────────────
 //
 // Builds the tool list for the "go-dev" subagent preset. It selects
 // parent-wired tools by name (read, write, edit, ls, bash, grep) and
-// appends the three custom Go tool stubs.
-//
-// The custom stubs are freshly constructed here rather than selected
-// from parent_tools because they are extension-provided tools that
-// don't exist in the parent's tool set. When the extension is loaded
-// via the Tier-1 extension system, these stubs are also registered
-// via `host.registerTool()` so the parent LLM can call them directly.
+// appends the single custom Go tool stub.
 
 fn buildGoDevTools(
     allocator: std.mem.Allocator,
@@ -300,12 +221,8 @@ fn buildGoDevTools(
     });
     errdefer allocator.free(selected);
 
-    // Step 2: append the three custom Go tool stubs
-    const custom = [_]at.AgentTool{
-        gofmtTool(),
-        govetTool(),
-        gotestTool(),
-    };
+    // Step 2: append the single Go tool stub
+    const custom = [_]at.AgentTool{goTool()};
 
     const total = try allocator.alloc(at.AgentTool, selected.len + custom.len);
     @memcpy(total[0..selected.len], selected);
@@ -314,7 +231,7 @@ fn buildGoDevTools(
     return total;
 }
 
-// ─── registerPreset helper (standalone) ────────────────────────────
+// ─── registerPreset helper (standalone) ──────────────────────────────
 //
 // Registers the "go-dev" preset into any PresetRegistry without going
 // through the extension system. This is useful for mode drivers that
@@ -324,7 +241,7 @@ fn buildGoDevTools(
 pub fn registerPreset(registry: *subagent_mod.PresetRegistry) !void {
     try registry.register(.{
         .name = "go-dev",
-        .description = "Go development: edit, format, vet, and test Go code.",
+        .description = "Go development: edit, format, vet, build, and test Go code.",
         .default_profile = "",
         .default_role = .code,
         .default_system_prompt =
@@ -332,41 +249,40 @@ pub fn registerPreset(registry: *subagent_mod.PresetRegistry) !void {
         \\review, and maintain Go code.
         \\
         \\You have the usual file tools (read, write, edit, ls, grep, bash)
-        \\plus Go-specific tools (gofmt, govet, gotest).
+        \\plus the "go" tool that dispatches fmt, vet, build, and test.
         \\
         \\Workflow:
         \\  1. Read the relevant files first to understand the codebase.
         \\  2. Make focused edits. Use edit over write for existing files.
-        \\  3. Run gofmt on every Go file you create or modify.
-        \\  4. Run go vet on affected packages after making changes.
-        \\  5. Run go test to verify correctness.
-        \\  6. Report what you did and what the tool output says.
+        \\  3. Run `go` with command="fmt" on every Go file you create or modify.
+        \\  4. Run `go` with command="vet" on affected packages after changes.
+        \\  5. Run `go` with command="build" to check compilation.
+        \\  6. Run `go` with command="test" to verify correctness.
+        \\  7. Report what you did and what the tool output says.
         ,
         .build_tools = buildGoDevTools,
     });
 }
 
-// ─── Extension entry point (Tier-1) ────────────────────────────────
+// ─── Extension entry point (Tier-1) ──────────────────────────────────
 //
 // When loaded via `--extensions go-dev`, init_fn:
-//   1. Registers the three Go tool stubs with the host so the
-//      parent LLM can call them directly.
+//   1. Registers the single Go tool stub with the host so the
+//      parent LLM can call it directly.
 //   2. Registers the "go-dev" preset via host.registerPreset() so
 //      the subagent tool can spawn a Go-focused sub-agent.
 
 pub fn extension() ext.Extension {
     return .{
         .name = "go-dev",
-        .version = "0.1.0",
+        .version = "0.2.0",
         .init_fn = init,
     };
 }
 
 fn init(_: *ext.Extension, host: *ext.Host) ext.ExtError!void {
-    // Register custom tools so the parent LLM sees them.
-    try host.registerTool(gofmtTool());
-    try host.registerTool(govetTool());
-    try host.registerTool(gotestTool());
+    // Register the single custom tool so the parent LLM sees it.
+    try host.registerTool(goTool());
 
     // Register the "go-dev" preset.
     // host.presets is set by the mode driver (via Manager.presets).
@@ -376,7 +292,7 @@ fn init(_: *ext.Extension, host: *ext.Host) ext.ExtError!void {
     if (host.presets) |registry| try registerPreset(registry);
 }
 
-// ─── Internal helpers ──────────────────────────────────────────────
+// ─── Internal helpers ────────────────────────────────────────────────
 
 /// Select tools from `parent_tools` by name. Mirrors the same-named
 /// helper in subagent.zig but duplicated here so this module has no
@@ -401,37 +317,19 @@ fn selectTools(
     return allocator.realloc(out, n);
 }
 
-// ─── Tool-error helper tests ─────────────────────────────────────
+// ─── Tests ───────────────────────────────────────────────────────────
 
-test "toolError: renders [code] msg + sets tool_code + is_error=true" {
-    const gpa = testing.allocator;
-    var res = try toolError(gpa, "gofmt_not_found", "{s} {s}", .{ "hello", "world" });
-    defer res.deinit(gpa);
-    try testing.expect(res.is_error);
-    try testing.expect(res.tool_code != null);
-    try testing.expectEqualStrings("gofmt_not_found", res.tool_code.?);
-    try testing.expectEqual(@as(usize, 1), res.content.len);
-    try testing.expectEqualStrings(
-        "[gofmt_not_found] hello world",
-        res.content[0].text.text,
-    );
+const testing = std.testing;
+
+test "goTool returns a properly named AgentTool" {
+    const t = goTool();
+    try testing.expectEqualStrings("go", t.name);
+    try testing.expect(t.description.len > 0);
+    try testing.expect(t.parameters_json.len > 0);
+    try testing.expect(t.execute == goExecute);
 }
 
-test "toolError: empty format args" {
-    const gpa = testing.allocator;
-    var res = try toolError(gpa, "go_cmd_not_found", "go not in PATH", .{});
-    defer res.deinit(gpa);
-    try testing.expect(res.is_error);
-    try testing.expectEqualStrings("go_cmd_not_found", res.tool_code.?);
-    try testing.expectEqualStrings(
-        "[go_cmd_not_found] go not in PATH",
-        res.content[0].text.text,
-    );
-}
-
-// ─── Execute function tests (require go + gofmt in PATH) ─────────
-
-test "gofmtExecute: formats badly indented .go file" {
+test "goExecute: fmt on badly formatted .go file returns diff" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
     const dir = tmp_dir.dir;
@@ -440,24 +338,24 @@ test "gofmtExecute: formats badly indented .go file" {
         \\package foo
         \\func Bar()   {}
         \\
-    ; 
+    ;
     var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 
     try dir.writeFile(io, .{ .sub_path = "test.go", .data = badly_formatted });
-    try dir.writeFile(io, .{ .sub_path = "test.go", .data = badly_formatted });
 
-    // Build the args JSON for gofmtExecute.
     const abs_path = try std.fmt.allocPrint(gpa, ".zig-cache/tmp/{s}/test.go", .{tmp_dir.sub_path});
     defer gpa.free(abs_path);
 
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"path\": \"{s}\" }}", .{abs_path});
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"fmt","path":"{s}"}}
+    , .{abs_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gofmtTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -469,15 +367,13 @@ test "gofmtExecute: formats badly indented .go file" {
     );
     defer result.deinit(gpa);
 
-    // gofmt -d on a badly formatted file returns a diff.
     try testing.expect(!result.is_error);
     try testing.expect(result.content.len > 0);
     try testing.expect(result.content[0].text.text.len > 0);
-    // The diff should mention test.go.
     try testing.expect(std.mem.indexOf(u8, result.content[0].text.text, "test.go") != null);
 }
 
-test "gofmtExecute: already formatted file returns no-diff message" {
+test "goExecute: fmt on already formatted file returns no-diff message" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -496,12 +392,14 @@ test "gofmtExecute: already formatted file returns no-diff message" {
     const abs_path = try std.fmt.allocPrint(gpa, ".zig-cache/tmp/{s}/good.go", .{tmp_dir.sub_path});
     defer gpa.free(abs_path);
 
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"path\": \"{s}\" }}", .{abs_path});
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"fmt","path":"{s}"}}
+    , .{abs_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gofmtTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -517,15 +415,15 @@ test "gofmtExecute: already formatted file returns no-diff message" {
     try testing.expectEqualStrings("File is already formatted.", result.content[0].text.text);
 }
 
-test "gofmtExecute: non-.go path returns tool error with code gofmt_not_a_go_file" {
+test "goExecute: fmt on non-.go path returns tool error" {
     const gpa = testing.allocator;
-    const args_json = "{\"path\": \"/tmp/foo.txt\"}";
+    const args_json = "{\"command\":\"fmt\",\"path\":\"/tmp/foo.txt\"}";
     var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gofmtTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -539,19 +437,19 @@ test "gofmtExecute: non-.go path returns tool error with code gofmt_not_a_go_fil
 
     try testing.expect(result.is_error);
     try testing.expect(result.tool_code != null);
-    try testing.expectEqualStrings("gofmt_not_a_go_file", result.tool_code.?);
+    try testing.expectEqualStrings("go_fmt_not_a_go_file", result.tool_code.?);
     try testing.expect(std.mem.indexOf(u8, result.content[0].text.text, ".go") != null);
 }
 
-test "gofmtExecute: non-existent path returns spawn error" {
+test "goExecute: fmt on non-existent path returns spawn error" {
     const gpa = testing.allocator;
-    const args_json = "{\"path\": \"/tmp/nonexistent_dir_12345/test.go\"}";
+    const args_json = "{\"command\":\"fmt\",\"path\":\"/tmp/nonexistent_dir_12345/test.go\"}";
     var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gofmtTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -567,7 +465,7 @@ test "gofmtExecute: non-existent path returns spawn error" {
     try testing.expect(result.tool_code != null);
 }
 
-test "govetExecute: passes on well-formed package" {
+test "goExecute: vet passes on well-formed package" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -588,12 +486,14 @@ test "govetExecute: passes on well-formed package" {
 
     const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
     defer gpa.free(cwd_path);
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"vet","path":".","cwd":"{s}"}}
+    , .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = govetTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -608,7 +508,50 @@ test "govetExecute: passes on well-formed package" {
     try testing.expect(!result.is_error);
 }
 
-test "gotestExecute: passes on passing test" {
+test "goExecute: build compiles a valid package" {
+    const gpa = testing.allocator;
+    const tmp_dir = std.testing.tmpDir(.{});
+
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| { count += 1; }
+    const env_slice: [:null]const ?[*:0]u8 = std.c.environ[0..count :null];
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .{ .block = .{ .slice = env_slice } } });
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "go.mod", .data = "module testpkg\n\ngo 1.24\n" });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.go", .data =
+        \\package main
+        \\
+        \\func main() {}
+        \\
+    });
+
+    const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
+    defer gpa.free(cwd_path);
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"build","path":".","cwd":"{s}"}}
+    , .{cwd_path});
+    defer gpa.free(args_json);
+
+    var cancel = franky.ai.stream.Cancel{};
+
+    const tool = goTool();
+    var result = try tool.execute(
+        &tool,
+        gpa,
+        io,
+        "test-call",
+        args_json,
+        &cancel,
+        at.OnUpdate{},
+    );
+    defer result.deinit(gpa);
+
+    try testing.expect(!result.is_error);
+}
+
+test "goExecute: test passes on passing test" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -633,12 +576,14 @@ test "gotestExecute: passes on passing test" {
 
     const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
     defer gpa.free(cwd_path);
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"test","path":".","cwd":"{s}"}}
+    , .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gotestTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -656,7 +601,7 @@ test "gotestExecute: passes on passing test" {
         std.mem.indexOf(u8, result.content[0].text.text, "ok") != null);
 }
 
-test "gotestExecute: failing test returns error with tool_code gotest_failed" {
+test "goExecute: failing test returns error with tool_code go_test_failed" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -681,12 +626,14 @@ test "gotestExecute: failing test returns error with tool_code gotest_failed" {
 
     const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
     defer gpa.free(cwd_path);
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
+    const args_json = try std.fmt.allocPrint(gpa,
+        \\{{"command":"test","path":".","cwd":"{s}"}}
+    , .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
 
-    const tool = gotestTool();
+    const tool = goTool();
     var result = try tool.execute(
         &tool,
         gpa,
@@ -700,36 +647,34 @@ test "gotestExecute: failing test returns error with tool_code gotest_failed" {
 
     try testing.expect(result.is_error);
     try testing.expect(result.tool_code != null);
-    try testing.expectEqualStrings("gotest_failed", result.tool_code.?);
+    try testing.expectEqualStrings("go_test_failed", result.tool_code.?);
     try testing.expect(std.mem.indexOf(u8, result.content[0].text.text, "FAIL") != null);
 }
 
-// ─── Tests ─────────────────────────────────────────────────────────
+test "goExecute: unknown command returns tool error" {
+    const gpa = testing.allocator;
+    const args_json = "{\"command\":\"unknown\",\"path\":\".\"}";
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
+    defer threaded.deinit();
+    const io = threaded.io();
+    var cancel = franky.ai.stream.Cancel{};
 
-const testing = std.testing;
+    const tool = goTool();
+    var result = try tool.execute(
+        &tool,
+        gpa,
+        io,
+        "test-call",
+        args_json,
+        &cancel,
+        at.OnUpdate{},
+    );
+    defer result.deinit(gpa);
 
-test "gofmtTool returns a properly named AgentTool" {
-    const t = gofmtTool();
-    try testing.expectEqualStrings("gofmt", t.name);
-    try testing.expect(t.description.len > 0);
-    try testing.expect(t.parameters_json.len > 0);
-    try testing.expect(t.execute == gofmtExecute);
-}
-
-test "govetTool returns a properly named AgentTool" {
-    const t = govetTool();
-    try testing.expectEqualStrings("govet", t.name);
-    try testing.expect(t.description.len > 0);
-    try testing.expect(t.parameters_json.len > 0);
-    try testing.expect(t.execute == govetExecute);
-}
-
-test "gotestTool returns a properly named AgentTool" {
-    const t = gotestTool();
-    try testing.expectEqualStrings("gotest", t.name);
-    try testing.expect(t.description.len > 0);
-    try testing.expect(t.parameters_json.len > 0);
-    try testing.expect(t.execute == gotestExecute);
+    try testing.expect(result.is_error);
+    try testing.expect(result.tool_code != null);
+    try testing.expectEqualStrings("go_unknown_command", result.tool_code.?);
+    try testing.expect(std.mem.indexOf(u8, result.content[0].text.text, "unknown") != null);
 }
 
 test "selectTools filters by name from parent slice" {
@@ -763,7 +708,7 @@ test "registerPreset registers go-dev with correct fields" {
     try testing.expect(p.?.default_system_prompt.len > 0);
 }
 
-test "buildGoDevTools returns exactly 9 tools: 6 built-in + 3 custom" {
+test "buildGoDevTools returns exactly 7 tools: 6 built-in + 1 custom" {
     const gpa = testing.allocator;
 
     const parent = [_]at.AgentTool{
@@ -779,7 +724,8 @@ test "buildGoDevTools returns exactly 9 tools: 6 built-in + 3 custom" {
     const tools = try buildGoDevTools(gpa, &parent);
     defer gpa.free(tools);
 
-    try testing.expectEqual(@as(usize, 9), tools.len);
+    try testing.expectEqual(@as(usize, 7), tools.len);
+    try testing.expect(std.mem.eql(u8, "go", tools[tools.len - 1].name));
 
     // Helper: check if a tool name is in the list.
     const hasName = struct {
@@ -797,10 +743,8 @@ test "buildGoDevTools returns exactly 9 tools: 6 built-in + 3 custom" {
     try testing.expect(hasName(tools, "bash"));
     try testing.expect(hasName(tools, "grep"));
 
-    // Custom Go tools that SHOULD be present.
-    try testing.expect(hasName(tools, "gofmt"));
-    try testing.expect(hasName(tools, "govet"));
-    try testing.expect(hasName(tools, "gotest"));
+    // Custom Go tool that SHOULD be present.
+    try testing.expect(hasName(tools, "go"));
 
     // Tools that should NOT be present.
     try testing.expect(!hasName(tools, "find"));
@@ -809,11 +753,11 @@ test "buildGoDevTools returns exactly 9 tools: 6 built-in + 3 custom" {
 test "extension factory returns a properly named Extension" {
     const ext_instance = extension();
     try testing.expectEqualStrings("go-dev", ext_instance.name);
-    try testing.expectEqualStrings("0.1.0", ext_instance.version);
+    try testing.expectEqualStrings("0.2.0", ext_instance.version);
     try testing.expect(ext_instance.init_fn != null);
 }
 
-test "init_fn registers tools and preset through Host" {
+test "init_fn registers tool and preset through Host" {
     const gpa = testing.allocator;
     var slash_reg = franky.coding.slash.Registry.init(gpa);
     defer slash_reg.deinit();
@@ -827,21 +771,12 @@ test "init_fn registers tools and preset through Host" {
 
     try mgr.register(extension(), &slash_reg);
 
-    // Check that 3 tools were registered.
+    // Check that 1 tool was registered.
     const tools = mgr.tools();
-    try testing.expectEqual(@as(usize, 3), tools.len);
+    try testing.expectEqual(@as(usize, 1), tools.len);
 
-    // Check each tool name.
-    inline for (.{ "gofmt", "govet", "gotest" }) |name| {
-        var found = false;
-        for (tools) |t| {
-            if (std.mem.eql(u8, t.name, name)) {
-                found = true;
-                break;
-            }
-        }
-        try testing.expect(found);
-    }
+    // Check tool name.
+    try testing.expectEqualStrings("go", tools[0].name);
 
     // Check that the preset was registered.
     const p = preset_reg.get("go-dev");
@@ -849,3 +784,18 @@ test "init_fn registers tools and preset through Host" {
     try testing.expectEqualStrings("go-dev", p.?.name);
     try testing.expectEqual(.code, p.?.default_role);
 }
+
+test "buildParametersJson includes go-dev preset" {
+    const gpa = testing.allocator;
+    var reg = subagent_mod.PresetRegistry.init(gpa);
+    defer reg.deinit();
+
+    try registerPreset(&reg);
+
+    const params = try subagent_mod.buildParametersJson(gpa, &reg);
+    defer gpa.free(params);
+
+    // The JSON enum should contain the go-dev preset name.
+    try testing.expect(std.mem.indexOf(u8, params, "\"go-dev\"") != null);
+}
+
