@@ -4,20 +4,25 @@
 //! (`go`) and a subagent preset named `"go-dev"` that bundles it
 //! alongside the standard file and shell tools.
 //!
-//! ## Usage as a Tier-1 extension (inside franky main)
+//! ## Usage (standalone binary via SDK)
 //!
-//! Add the extension to the catalog in `extensions_builtin/catalog.zig`
-//! and activate with `--extensions go-dev`:
+//! Register via the franky SDK's `ext_catalog` before delegating to the
+//! mode driver. The extension's init_fn wires tools, presets, and slash
+//! commands automatically:
 //!
 //! ```zig
-//! const go_dev = @import("go_dev.zig");
-//! // in catalog.builtins:
-//! // .{ .name = "go-dev", .factory = go_dev.extension },
+//! const go_dev = @import("franky-golang");
+//! try franky.ext_catalog.register("go-dev", go_dev.extension);
+//! try franky.coding.modes.print.run(gpa, io, environ, environ_map, argv);
 //! ```
 //!
-//! ## Usage as a standalone preset registration
+//! Activate with `--extensions go-dev` on the CLI. Both print and
+//! interactive modes are supported out of the box — no forking of the
+//! mode driver needed.
 //!
-//! When the mode driver does NOT load extensions (print/rpc/proxy),
+//! ## Fallback: standalone preset registration (no extension system)
+//!
+//! When the mode driver does NOT load extensions (pre-SDK code),
 //! register the preset directly:
 //!
 //! ```zig
@@ -30,7 +35,7 @@
 //!
 //! | Tool | Description | Required args |
 //! |------|-------------|---------------|
-//! | `go`  | Run `go fmt` / `go vet` / `go build` / `go test` | `command` (string), `path` (string, except `path` is a file for `fmt` and a package for others), `flags` (string, optional), `cwd` (string, optional) |
+//! | `go`  | Run `go fmt` / `go vet` / `go build` / `go test` | `command` (string), `path` (string; file, directory, or ./...), `flags` (string, optional), `cwd` (string, optional) |
 
 const std = @import("std");
 const franky = @import("franky");
@@ -43,13 +48,13 @@ const ext = franky.coding.extensions;
 // ─── Tool executor ───────────────────────────────────────────────────
 //
 // Dispatches to one of four sub-tools based on the `command` field:
-//   "fmt"   → gofmt -d <path>        (path = .go file)
-//   "vet"   → go vet <path>          (path = package)
-//   "build" → go build <path>        (path = package)
-//   "test"  → go test [flags] <path> (path = package)
+//   "fmt"   → gofmt -d <path>        (file, directory, or ./...)
+//   "vet"   → go vet <path>          (package path or ./...)
+//   "build" → go build <path>        (package path or ./...)
+//   "test"  → go test [flags] <path> (package path or ./...)
 //
 // Error results use structured tool_code values:
-//   go_cmd_not_found, go_fmt_not_a_go_file, go_fmt_failed,
+//   go_cmd_not_found, go_fmt_failed,
 //   go_vet_failed, go_build_failed, go_test_failed.
 
 /// Build a structured failure ToolResult with a tool_code subcode.
@@ -94,11 +99,9 @@ fn goExecute(
     const path = args.value.path;
 
     // ── go fmt ────────────────────────────────────────────────────
+    // gofmt works with .go files, directories, and ./... patterns.
+    // We don't validate the path here — gofmt reports its own errors.
     if (std.mem.eql(u8, command, "fmt")) {
-        if (!std.mem.endsWith(u8, path, ".go")) {
-            return toolError(allocator, "go_fmt_not_a_go_file", "expected a .go file, got '{s}'", .{path});
-        }
-
         const result = std.process.run(allocator, io, .{
             .argv = &[_][]const u8{ "gofmt", "-d", path },
         }) catch |err| {
@@ -195,7 +198,7 @@ pub fn goTool() at.AgentTool {
         .parameters_json =
         \\{"type":"object","required":["command","path"],"properties":{
         \\"command":{"type":"string","enum":["fmt","vet","build","test"],"description":"Go sub-command to run"},
-        \\"path":{"type":"string","description":"File path (fmt) or package path (vet/build/test, e.g. ./... or ./internal/foo)"},
+        \\"path":{"type":"string","description":"File, directory, or ./... pattern (any sub-command)"},
         \\"flags":{"type":"string","description":"Additional flags for test (optional, e.g. -v -race)"},
         \\"cwd":{"type":"string","description":"Working directory (optional)"}
         \\}}
@@ -321,6 +324,26 @@ fn selectTools(
 
 const testing = std.testing;
 
+/// Returns true if a binary of the given name exists on PATH.
+/// Used to skip tests that require Go/gofmt in CI environments
+/// where these tools aren't installed.
+fn haveBinary(name: []const u8) bool {
+    const gpa = testing.allocator;
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
+    defer threaded.deinit();
+    const io = threaded.io();
+    const result = std.process.run(gpa, io, .{
+        .argv = &[_][]const u8{ name, "version" },
+    }) catch |err| {
+        // FileNotFound means the binary doesn't exist on PATH.
+        // Any other error (e.g. non-zero exit) means it exists.
+        return err != error.FileNotFound;
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    return true;
+}
+
 test "goTool returns a properly named AgentTool" {
     const t = goTool();
     try testing.expectEqualStrings("go", t.name);
@@ -330,6 +353,7 @@ test "goTool returns a properly named AgentTool" {
 }
 
 test "goExecute: fmt on badly formatted .go file returns diff" {
+    if (!haveBinary("gofmt")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
     const dir = tmp_dir.dir;
@@ -374,6 +398,7 @@ test "goExecute: fmt on badly formatted .go file returns diff" {
 }
 
 test "goExecute: fmt on already formatted file returns no-diff message" {
+    if (!haveBinary("gofmt")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -415,7 +440,8 @@ test "goExecute: fmt on already formatted file returns no-diff message" {
     try testing.expectEqualStrings("File is already formatted.", result.content[0].text.text);
 }
 
-test "goExecute: fmt on non-.go path returns tool error" {
+test "goExecute: fmt on non-.go path runs gofmt which reports its own error" {
+    if (!haveBinary("gofmt")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const args_json = "{\"command\":\"fmt\",\"path\":\"/tmp/foo.txt\"}";
     var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
@@ -435,10 +461,12 @@ test "goExecute: fmt on non-.go path returns tool error" {
     );
     defer result.deinit(gpa);
 
+    // gofmt runs on any path and reports its own error. The tool code
+    // is go_fmt_failed, not go_fmt_not_a_go_file — we no longer
+    // validate the extension before calling gofmt.
     try testing.expect(result.is_error);
     try testing.expect(result.tool_code != null);
-    try testing.expectEqualStrings("go_fmt_not_a_go_file", result.tool_code.?);
-    try testing.expect(std.mem.indexOf(u8, result.content[0].text.text, ".go") != null);
+    try testing.expectEqualStrings("go_fmt_failed", result.tool_code.?);
 }
 
 test "goExecute: fmt on non-existent path returns spawn error" {
@@ -466,6 +494,7 @@ test "goExecute: fmt on non-existent path returns spawn error" {
 }
 
 test "goExecute: vet passes on well-formed package" {
+    if (!haveBinary("go")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -509,6 +538,7 @@ test "goExecute: vet passes on well-formed package" {
 }
 
 test "goExecute: build compiles a valid package" {
+    if (!haveBinary("go")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -552,6 +582,7 @@ test "goExecute: build compiles a valid package" {
 }
 
 test "goExecute: test passes on passing test" {
+    if (!haveBinary("go")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
@@ -602,6 +633,7 @@ test "goExecute: test passes on passing test" {
 }
 
 test "goExecute: failing test returns error with tool_code go_test_failed" {
+    if (!haveBinary("go")) return error.SkipZigTest;
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 

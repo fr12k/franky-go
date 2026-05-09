@@ -5,9 +5,10 @@
     .minimum_zig_version = "0.17.0-dev",
     .dependencies = .{
         .franky = .{
-            .url = "git+https://github.com/fr12k/franky.git#c0e991db036362ed86c9a9fe30b7ae93e686ede9",
-            .hash = "franky-0.24.7-MZKCXUeLMACXv39NSGBhZdBR2NBbvq7QnDBkgIRDuwj4",
+            .url = "git+https://github.com/fr12k/franky.git#930785d44060969b20cca650fc9d007a02b1b682",
+            .hash = "franky-0.24.7-MZKCXTPdMACUGUZpQFMN8HbSW-xZXO2YqYRkGV7Eaujq",
         },
+        // .franky = .{ .path = "../franky" },
     },
     .paths = .{
         "build.zig",
