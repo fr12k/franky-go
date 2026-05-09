@@ -2,3 +2,4 @@
 .franky-sessions/
 .zig-cache/
 zig-out/
+zig-pkg/

@@ -132,7 +132,10 @@ fn govetExecute(
     _ = cancel;
     _ = on_update;
 
-    const GovetArgs = struct { pkg: []const u8 };
+    const GovetArgs = struct {
+        pkg: []const u8,
+        cwd: ?[]const u8 = null,
+    };
     const args = try std.json.parseFromSlice(GovetArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
     defer args.deinit();
 
@@ -140,6 +143,7 @@ fn govetExecute(
     const argv = &[_][]const u8{ "go", "vet", pkg };
     const result = std.process.run(allocator, io, .{
         .argv = argv,
+        .cwd = if (args.value.cwd) |c| .{ .path = c } else .inherit,
     }) catch |err| {
         if (err == error.FileNotFound) {
             return toolError(allocator, "go_cmd_not_found", "go command not found. Is Go installed and in your PATH?", .{});
@@ -186,6 +190,7 @@ fn gotestExecute(
     const GotestArgs = struct {
         pkg: []const u8,
         flags: ?[]const u8 = null,
+        cwd: ?[]const u8 = null,
     };
     const args = try std.json.parseFromSlice(GotestArgs, allocator, args_json, .{ .ignore_unknown_fields = true });
     defer args.deinit();
@@ -206,6 +211,7 @@ fn gotestExecute(
 
     const result = std.process.run(allocator, io, .{
         .argv = argv_list.items,
+        .cwd = if (args.value.cwd) |c| .{ .path = c } else .inherit,
     }) catch |err| {
         if (err == error.FileNotFound) {
             return toolError(allocator, "go_cmd_not_found", "go command not found. Is Go installed and in your PATH?", .{});
@@ -216,9 +222,9 @@ fn gotestExecute(
     defer allocator.free(result.stderr);
 
     const output = try std.fmt.allocPrint(allocator, "STDOUT:\n{s}\nSTDERR:\n{s}", .{ result.stdout, result.stderr });
-    defer allocator.free(output);
 
     if (result.term.exited != 0) {
+        defer allocator.free(output);
         return toolError(allocator, "gotest_failed", "go test exited with code {d}:\n{s}", .{ result.term.exited, output });
     }
 
@@ -565,7 +571,10 @@ test "govetExecute: passes on well-formed package" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
-    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| { count += 1; }
+    const env_slice: [:null]const ?[*:0]u8 = std.c.environ[0..count :null];
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .{ .block = .{ .slice = env_slice } } });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -577,7 +586,9 @@ test "govetExecute: passes on well-formed package" {
         \\
     });
 
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".zig-cache/tmp/{s}/.\" }}", .{tmp_dir.sub_path});
+    const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
+    defer gpa.free(cwd_path);
+    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
@@ -601,7 +612,10 @@ test "gotestExecute: passes on passing test" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
-    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| { count += 1; }
+    const env_slice: [:null]const ?[*:0]u8 = std.c.environ[0..count :null];
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .{ .block = .{ .slice = env_slice } } });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -617,7 +631,9 @@ test "gotestExecute: passes on passing test" {
         \\
     });
 
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".zig-cache/tmp/{s}/.\" }}", .{tmp_dir.sub_path});
+    const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
+    defer gpa.free(cwd_path);
+    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
@@ -644,7 +660,10 @@ test "gotestExecute: failing test returns error with tool_code gotest_failed" {
     const gpa = testing.allocator;
     const tmp_dir = std.testing.tmpDir(.{});
 
-    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .empty });
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| { count += 1; }
+    const env_slice: [:null]const ?[*:0]u8 = std.c.environ[0..count :null];
+    var threaded = std.Io.Threaded.init(gpa, .{ .argv0 = .empty, .environ = .{ .block = .{ .slice = env_slice } } });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -660,7 +679,9 @@ test "gotestExecute: failing test returns error with tool_code gotest_failed" {
         \\
     });
 
-    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \"{s}/.\" }}", .{tmp_dir.sub_path});
+    const cwd_path = try std.fs.path.join(gpa, &[_][]const u8{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
+    defer gpa.free(cwd_path);
+    const args_json = try std.fmt.allocPrint(gpa, "{{ \"pkg\": \".\", \"cwd\": \"{s}\" }}", .{cwd_path});
     defer gpa.free(args_json);
 
     var cancel = franky.ai.stream.Cancel{};
