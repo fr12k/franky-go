@@ -1,0 +1,310 @@
+{
+    "tools": {
+        "retry": {
+            "maxAttempts": 3,
+            "maxTotalMs": 180000
+        }
+    },
+    "review": {
+        "profiles": ["ollama-deepseek-flash", "mistral-labs-leanstral", "mistral-codestral", "ollama-deepseek-pro"],
+        "min_models": 2,
+        "max_models": 4,
+        "timeout_ms": 180000
+    },
+    "profiles": {
+        "cerebras": {
+            "provider": "gateway",
+            "model": "qwen-3-235b-a22b-instruct-2507",
+            "base-url": "https://api.cerebras.ai/v1/chat/completions",
+            "api-key-env": "CEREBRAS_API_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "300000"
+            }
+        },
+        "cloudflare-gemma": {
+            "provider": "gateway",
+            "model": "@cf/moonshotai/kimi-k2.6",
+            "base-url": "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1/chat/completions",
+            "api-key-env": "CF_API_TOKEN",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "300000"
+            }
+        },
+        "cloudflare-nemotron3": {
+            "provider": "gateway",
+            "model": "@cf/nvidia/nemotron-3-120b-a12b",
+            "base-url": "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1/chat/completions",
+            "api-key-env": "CF_API_TOKEN",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "300000"
+            }
+        },
+        "ollama-gemma4": {
+            "provider": "gateway",
+            "base-url": "http://localhost:11434/v1/chat/completions",
+            "model": "gemma4:latest",
+            "api-key": "ollama",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "ollama-home": {
+            "provider": "gateway",
+            "base-url": "http://192.168.1.115:11434/v1/chat/completions",
+            "model": "gemma4:latest",
+            "api-key": "ollama",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "mistral-devstral": {
+            "provider": "gateway",
+            "base-url": "https://api.mistral.ai/v1/chat/completions",
+            "model": "devstral-2512",
+            "api-key-env": "MISTRAL_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            },
+            "retry_max_attempts": 15,
+            "retry_max_total_ms": 1800000,
+            "base_delay_ms": 40000
+        },
+        "mistral-medium-3-5": {
+            "provider": "gateway",
+            "base-url": "https://api.mistral.ai/v1/chat/completions",
+            "model": "mistral-medium-3-5",
+            "api-key-env": "MISTRAL_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            },
+            "retry_max_attempts": 15,
+            "retry_max_total_ms": 1800000,
+            "base_delay_ms": 40000
+        },
+        "mistral-codestral": {
+            "provider": "gateway",
+            "base-url": "https://api.mistral.ai/v1/chat/completions",
+            "model": "codestral-2508",
+            "api-key-env": "MISTRAL_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            },
+            "retry_max_attempts": 15,
+            "retry_max_total_ms": 1800000,
+            "base_delay_ms": 40000
+        },
+        "mistral-labs-leanstral": {
+            "provider": "gateway",
+            "base-url": "https://api.mistral.ai/v1/chat/completions",
+            "model": "labs-leanstral-2603",
+            "api-key-env": "MISTRAL_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            },
+            "retry_max_attempts": 15,
+            "retry_max_total_ms": 1800000,
+            "base_delay_ms": 40000
+        },
+        "ollama-deepseek-flash": {
+            "provider": "gateway",
+            "base-url": "https://ollama.com/v1/chat/completions",
+            "model": "deepseek-v4-flash:cloud",
+            "api-key-env": "OLLAMA_API_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "openrouter": {
+            "provider": "gateway",
+            "base-url": "https://openrouter.ai/api/v1/chat/completions",
+            "model": "openrouter/owl-alpha",
+            "api-key-env": "OPENROUTER_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "ollama-deepseek-pro": {
+            "provider": "gateway",
+            "base-url": "https://ollama.com/v1/chat/completions",
+            "model": "deepseek-v4-pro:cloud",
+            "api-key-env": "OLLAMA_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "ollama-kimi-k": {
+            "provider": "gateway",
+            "base-url": "https://ollama.com/v1/chat/completions",
+            "model": "kimi-k2.6:cloud",
+            "api-key-env": "OLLAMA_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "ollama-glm-5": {
+            "provider": "gateway",
+            "base-url": "https://ollama.com/v1/chat/completions",
+            "model": "glm-5.1:cloud",
+            "api-key-env": "OLLAMA_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "ollama-granite4": {
+            "provider": "gateway",
+            "base-url": "http://localhost:11434/v1/chat/completions",
+            "model": "granite4.1:30b",
+            "api-key-env": "OLLAMA_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "google": {
+            "provider": "google-gemini",
+            "model": "gemini-2.5-pro",
+            "api-key-env": "GEMINI_API_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        },
+        "gemini": {
+            "provider": "google-gemini",
+            "model": "gemini-2.5-pro",
+            "api_key_env": "GEMINI_API_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "thinking": "xhigh",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000",
+                "FRANKY_CA_BUNDLE": "/etc/ssl/certs/proxy-ca.pem"
+            }
+        },
+        "gemini3": {
+            "provider": "google-gemini",
+            "model": "gemini-3.1-pro-preview",
+            "api_key_env": "GEMINI_API_KEY",
+            "ask-tools": "all",
+            "role": "full",
+            "prompts": true,
+            "log-level": "trace",
+            "thinking": "xhigh",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000",
+                "FRANKY_CA_BUNDLE": "/etc/ssl/certs/proxy-ca.pem"
+            }
+        },
+        "openai": {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "api-key-env": "OPENAI_API_KEY",
+            "role": "full",
+            "ask-tools": "all",
+            "prompts": true,
+            "log-level": "trace",
+            "http-trace-dir": "${HOME}/.franky/log-trace",
+            "thinking": "xhigh",
+            "env": {
+                "FRANKY_FIRST_BYTE_TIMEOUT_MS": "1200000"
+            }
+        }
+    }
+}

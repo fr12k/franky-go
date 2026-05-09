@@ -1,0 +1,9 @@
+stages:
+  - name: build
+    command: "zig build"
+    timeout_ms: 120000
+
+  - name: test
+    command: "zig build test --summary all"
+    timeout_ms: 120000
+    needs: [build]

@@ -1,0 +1,16 @@
+# v2.9 — paths hidden from default tool walks and IO. Enforcement is
+# unconditional: no tool argument can disable this. Edit this file to
+# add or remove paths.
+
+# Archived design RFCs and superseded brainstorms (the directory and
+# everything inside — relies on the matcher's ancestor-prefix walk).
+docs/archive/
+
+# Frozen specs — cross-referenced from current docs but not part of the
+# default working set (Q3: explicit listing).
+docs/spec/v0.md
+docs/spec/v1.md
+# Add docs/spec/v2.md once v2.x ships.
+
+
+SANDBOX.md

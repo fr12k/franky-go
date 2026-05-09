@@ -1,0 +1,17 @@
+.{
+    .name = .franky_golang,
+    .fingerprint = 0x910da9cda712c8e5,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0-dev",
+    .dependencies = .{
+        .franky = .{
+            .url = "git+https://github.com/fr12k/franky.git#1b3508462f798750b35ba094fd10f914a759a02b",
+            .hash = "franky-2.3.0-MZKCXZYWMADCZ1lS00WhNA6ffFxEPQtUn1MwGmGIo1DT",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

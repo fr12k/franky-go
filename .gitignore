@@ -1,0 +1,4 @@
+.claude/
+.franky-sessions/
+.zig-cache/
+zig-out/
